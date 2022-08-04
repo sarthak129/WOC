@@ -1,0 +1,479 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  CognitoDomain:
+    Type: String
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: ^[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?$
+    Description: Enter a string. Must be alpha numeric 3-63 in length.
+    Default: woc
+  BucketName:
+    Type: String
+    Default: woc-group25
+  VPCName:
+    Type: String
+    Default: WOCVPC
+  SecurityGroupName:
+    Type: String
+    Default: WOCSG
+  DynamoDBTable1:
+    Type: String
+    Default: woc_word
+  DynamoDBTable2:
+    Type: String
+    Default: woc_user_stats
+  LambdaName1:
+    Type: String
+    Default: wordFetch
+  LambdaName2:
+    Type: String
+    Default: getWordFromDB
+  LambdaName3:
+    Type: String
+    Default: createGame
+  LambdaName4:
+    Type: String
+    Default: getUserStats
+  LambdaName5:
+    Type: String
+    Default: updateUserStats
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      UserPoolName: !Ref CognitoDomain
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AliasAttributes:
+        - email
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_LINK
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      AllowedOAuthFlowsUserPoolClient: true
+      GenerateSecret: false
+      CallbackURLs:
+        - http://localhost:3000
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - openid
+      SupportedIdentityProviders:
+        - COGNITO
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomain
+      UserPoolId: !Ref UserPool
+
+  DynamoDBWord:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 10
+        WriteCapacityUnits: 10
+      TableName: !Ref DynamoDBTable1
+
+  DynamoDBUserStats:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 10
+        WriteCapacityUnits: 10
+      TableName: !Ref DynamoDBTable2
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Ref VPCName
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+
+  PublicSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      VpcId: !Ref VPC
+      AvailabilityZone: !Join ["", [!Ref "AWS::Region", "a"]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref VPCName, "Public-Subnet-1"]]
+
+  PrivateSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      VpcId: !Ref VPC
+      AvailabilityZone: !Join ["", [!Ref "AWS::Region", "a"]]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref VPCName, "Private-Subnet-1"]]
+
+  igwName:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref VPCName, "igwName"]]
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref igwName
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref igwName
+    DependsOn: AttachGateway
+
+  PublicSubnet1RouteTable:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  NatGateway:
+    Type: "AWS::EC2::NatGateway"
+    DependsOn: AttachGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - NatPublicIP
+          - AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  NatPublicIP:
+    Type: "AWS::EC2::EIP"
+    DependsOn: VPC
+    Properties:
+      Domain: vpc
+
+  PrivateRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTable:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  WOCSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      GroupName: !Ref SecurityGroupName
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
+  wordFetch:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName1
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::864066610148:role/LabRole
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: lambda/wordFetch.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref WOCSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+
+  getWordFromDB:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName2
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::864066610148:role/LabRole
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: lambda/getWordFromDB.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref WOCSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+
+  getWordFromDBUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      Cors: 
+        AllowCredentials: false
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowOrigins:
+          - "*"
+        ExposeHeaders: 
+          - access-control-allow-origin
+          - access-control-allow-headers
+          - access-control-allow-methods
+      TargetFunctionArn: !Ref getWordFromDB
+
+  getWordFromDBPermissionForURLInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref getWordFromDB
+      FunctionUrlAuthType: 'NONE'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+  
+  createGame:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName3
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::864066610148:role/LabRole
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: lambda/createGame.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref WOCSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+
+  createGameUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      Cors: 
+        AllowCredentials: false
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowOrigins:
+          - "*"
+        ExposeHeaders: 
+          - access-control-allow-origin
+          - access-control-allow-headers
+          - access-control-allow-methods
+      TargetFunctionArn: !Ref createGame
+
+  createGamePermissionForURLInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref createGame
+      FunctionUrlAuthType: 'NONE'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+
+  getUserStats:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName4
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::864066610148:role/LabRole
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: lambda/getUserStats.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref WOCSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+
+  getUserStatsUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      Cors: 
+        AllowCredentials: false
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowOrigins:
+          - "*"
+        ExposeHeaders: 
+          - access-control-allow-origin
+          - access-control-allow-headers
+          - access-control-allow-methods
+      TargetFunctionArn: !Ref getUserStats
+
+  getUserStatsPermissionForURLInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref getUserStats
+      FunctionUrlAuthType: 'NONE'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+
+  updateUserStats:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName5
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::864066610148:role/LabRole
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: lambda/updateUserStats.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref WOCSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+
+  updateUserStatsUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      Cors: 
+        AllowCredentials: false
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowOrigins:
+          - "*"
+        ExposeHeaders: 
+          - access-control-allow-origin
+          - access-control-allow-headers
+          - access-control-allow-methods
+      TargetFunctionArn: !Ref updateUserStats
+
+  updateUserStatsPermissionForURLInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref updateUserStats
+      FunctionUrlAuthType: 'NONE'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+
+  ScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: "cron(0/5 * ? * * *)"
+      Name: woceventrule
+      RoleArn: arn:aws:iam::864066610148:role/LabRole
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "wordFetch"
+              - "Arn"
+          Id: "wordFetchID"
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: wordFetch
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "ScheduledRule"
+          - "Arn"
+
+Outputs:
+  CognitoUserPoolID:
+    Value: !Ref UserPool
+    Description: The UserPool ID
+  CognitoAppClientID:
+    Value: !Ref UserPoolClient
+    Description: The app client
+  HostedUIURL:
+    Value: !Sub https://${CognitoDomain}.auth.us-west-2.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=code&scope=email+openid+phone+profile&redirect_uri=http://localhost:3000
+    Description: The hosted UI URL
+  VPCID:
+    Description: VPC ID
+    Value: !Ref "VPC"
+  PublicSubnet1ID:
+    Description: Public Subnet 1 ID
+    Value: !Ref "PublicSubnet1"
+  PrivateSubnet1ID:
+    Description: Private Subnet 1 ID
+    Value: !Ref "PrivateSubnet1"
+  SecurityGroupID:
+    Description: Security Group
+    Value: !Ref WOCSecurityGroup
+  GetWordFromDBLambdaUrl:
+    Description: GetWordFromDBLambdaUrl
+    Value: !GetAtt getWordFromDBUrl.FunctionUrl
+  CreateGameLambdaUrl:
+    Description: CreateGameLambdaUrl
+    Value: !GetAtt createGameUrl.FunctionUrl
+  getUserStatsLambdaUrl:
+    Description: getUserStatsLambdaUrl
+    Value: !GetAtt getUserStatsUrl.FunctionUrl
+  updateUserStatsLambdaUrl:
+    Description: updateUserStatsLambdaUrl
+    Value: !GetAtt updateUserStatsUrl.FunctionUrl
+  

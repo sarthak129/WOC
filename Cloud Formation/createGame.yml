@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  LambdaName:
+    Type: String
+    Default: woc
+
+Resources:
+  createGame:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::765129888930:role/LabRole
+      Code:
+        S3Bucket: woc-group25
+        S3Key: lambda/createGame.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-006f5217b3e7c3f0a
+        SubnetIds:
+          - subnet-0136a1ecd0cd0482a
+
+  createGameUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      Cors: 
+        AllowCredentials: false
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowOrigins:
+          - "*"
+        ExposeHeaders: 
+          - access-control-allow-origin
+          - access-control-allow-headers
+          - access-control-allow-methods
+      TargetFunctionArn: !Ref createGame
+
+  permissionForURLInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref createGame
+      FunctionUrlAuthType: 'NONE'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+
+Outputs:
+  createGameUrl:
+    Value: !GetAtt createGameUrl.FunctionUrl
+

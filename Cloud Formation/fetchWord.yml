@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  LambdaName:
+    Type: String
+    Default: wordFetch
+
+Resources:
+  wordFetch:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName
+      Description: ""
+      Handler: index.handler
+      Role: arn:aws:iam::765129888930:role/LabRole
+      Code:
+        S3Bucket: woc-group25
+        S3Key: lambda/wordFetch.zip
+      Runtime: nodejs16.x
+      Timeout: 15
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-006f5217b3e7c3f0a
+        SubnetIds:
+          - subnet-0136a1ecd0cd0482a
+

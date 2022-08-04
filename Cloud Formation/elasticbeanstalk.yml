@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  ElasticBeanstalkAppName:
+    Type: String
+    Default: WOC
+  BucketName:
+    Type: String
+    Default: woc-group25
+  zipFileKey:
+    Type: String
+    Default: ElasticBeanstalk/WOC.zip
+  VPC:
+    Type: String
+  PublicSubnet1:
+    Type: String
+  PrivateSubnet1:
+    Type: String
+  SecurityGroup:
+    Type: String
+
+Resources:
+  Application:
+    Type: "AWS::ElasticBeanstalk::Application"
+    Properties:
+      ApplicationName: !Ref ElasticBeanstalkAppName
+      Description: WOC ElasticBeanstalk Application
+
+  ApplicationVersion:
+    Type: "AWS::ElasticBeanstalk::ApplicationVersion"
+    Properties:
+      ApplicationName: !Ref Application
+      Description: ""
+      SourceBundle:
+        S3Bucket: !Ref BucketName
+        S3Key: !Ref zipFileKey
+
+  ElasticBeanstalkEnvironment:
+    Type: "AWS::ElasticBeanstalk::Environment"
+    Properties:
+      EnvironmentName: !Join ["-", [!Ref ElasticBeanstalkAppName, "PROD"]]
+      ApplicationName: !Ref Application
+      SolutionStackName: "64bit Amazon Linux 2 v5.5.4 running Node.js 16"
+      Tier:
+        Name: WebServer
+        Type: Standard
+        Version: "1.0"
+      VersionLabel: !Ref ApplicationVersion
+      OptionSettings:
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: ServiceRole
+          Value: LabRole
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: LabInstanceProfile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: EC2KeyName
+          Value: vockey
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: InstanceType
+          Value: t2.medium
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref SecurityGroup
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBSubnets
+          Value: !Ref PublicSubnet1
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value: !Ref PrivateSubnet1
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref VPC
+
+Outputs:
+  PublicAlbDnsName:
+    Description: ElasticBeanstalk APP URL
+    Value: !GetAtt "ElasticBeanstalkEnvironment.EndpointURL"
